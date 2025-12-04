@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from dataloader.dataset import MedicalDataSets
 from albumentations.augmentations import transforms
 from albumentations.core.composition import Compose
-from albumentations import RandomRotate90, Resize
+from albumentations import RandomRotate90, Resize, Flip
 
 from utils.util import AverageMeter
 import utils.losses as losses
@@ -50,7 +50,7 @@ def getDataloader():
     img_size = 256
     train_transform = Compose([
         RandomRotate90(),
-        transforms.Flip(),
+        Flip(),
         Resize(img_size, img_size),
         transforms.Normalize(),
     ])
