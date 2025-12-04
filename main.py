@@ -161,14 +161,19 @@ def train(args):
             % (epoch_num, max_epoch, avg_meters['loss'].avg, avg_meters['iou'].avg,
                avg_meters['val_loss'].avg, avg_meters['val_iou'].avg, avg_meters['SE'].avg,
                avg_meters['PC'].avg, avg_meters['F1'].avg, avg_meters['ACC'].avg))
+        
+        fold_str = str(args.fold)
+        model_dir = f"models/{args.train_dataset_name}/fold_{fold_str}"
+        os.makedirs(model_dir, exist_ok=True)
 
         if avg_meters['val_iou'].avg > best_iou:
-            if not os.path.exists('./checkpoint'):
-                os.mkdir('checkpoint')
-            torch.save(model.state_dict(), 'checkpoint/{}_model_{}.pth'
-                       .format(args.model, args.train_file_dir.split(".")[0]))
+            torch.save(model.state_dict(), f'{model_dir}/checkpoint_best.pth')
             best_iou = avg_meters['val_iou'].avg
             print("=> saved best model")
+    
+    torch.save(model.state_dict(), f'{model_dir}/checkpoint_final.pth')
+    print("=> saved final model")
+    
     return "Training Finished!"
 
 
