@@ -6,7 +6,7 @@ import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
-from dataloader.dataset import MedicalDataSets
+from dataloader.dataset import MedicalDataSets, CMUNeXt_nnUNetDataset
 from albumentations.augmentations import transforms
 from albumentations.core.composition import Compose
 from albumentations import RandomRotate90, Resize, Flip
@@ -36,9 +36,8 @@ seed_torch(41)
 parser = argparse.ArgumentParser()
 parser.add_argument('--model', type=str, default="CMUNeXt",
                     choices=["CMUNeXt", "CMUNeXt-S", "CMUNeXt-L"], help='model')
-parser.add_argument('--base_dir', type=str, default="./data/busi", help='dir')
-parser.add_argument('--train_file_dir', type=str, default="busi_train.txt", help='dir')
-parser.add_argument('--val_file_dir', type=str, default="busi_val.txt", help='dir')
+parser.add_argument('--train_dataset_name', type=str, default="Dataset073_GE_LE", help='train dataset name')
+parser.add_argument('--fold', type=int, default=0, help='fold')
 parser.add_argument('--base_lr', type=float, default=0.01,
                     help='segmentation network learning rate')
 parser.add_argument('--batch_size', type=int, default=8,
@@ -46,7 +45,7 @@ parser.add_argument('--batch_size', type=int, default=8,
 args = parser.parse_args()
 
 
-def getDataloader():
+def getDataloader(args):
     img_size = 256
     train_transform = Compose([
         RandomRotate90(),
@@ -59,10 +58,20 @@ def getDataloader():
         Resize(img_size, img_size),
         transforms.Normalize(),
     ])
-    db_train = MedicalDataSets(base_dir=args.base_dir, split="train", transform=train_transform,
-                               train_file_dir=args.train_file_dir, val_file_dir=args.val_file_dir)
-    db_val = MedicalDataSets(base_dir=args.base_dir, split="val", transform=val_transform,
-                             train_file_dir=args.train_file_dir, val_file_dir=args.val_file_dir)
+    db_train = CMUNeXt_nnUNetDataset(
+        dataset_name=args.train_dataset_name,
+        split="Tr",
+        fold=args.fold,
+        split_type="train",
+        transform=train_transform,
+    )
+    db_val = CMUNeXt_nnUNetDataset(
+        dataset_name=args.train_dataset_name,
+        split="Tr",
+        fold=args.fold,
+        split_type="val",
+        transform=val_transform,
+    )
     print("train num:{}, val num:{}".format(len(db_train), len(db_val)))
 
     trainloader = DataLoader(db_train, batch_size=8, shuffle=True,
@@ -88,9 +97,8 @@ def get_model(args):
 
 def train(args):
     base_lr = args.base_lr
-    trainloader, valloader = getDataloader()
+    trainloader, valloader = getDataloader(args)
     model = get_model(args)
-    print("train file dir:{} val file dir:{}".format(args.train_file_dir, args.val_file_dir))
     optimizer = optim.SGD(model.parameters(), lr=base_lr, momentum=0.9, weight_decay=0.0001)
     criterion = losses.__dict__['BCEDiceLoss']().cuda()
     print("{} iterations per epoch".format(len(trainloader)))
