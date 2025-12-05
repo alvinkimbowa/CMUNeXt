@@ -1,13 +1,13 @@
 #!/bin/bash
 
-nnUNet_raw="/home/ultrai/UltrAi/knee_us_segmentation/data/nnUNet_raw"
-nnUNet_preprocessed="/home/ultrai/UltrAi/knee_us_segmentation/data/nnUNet_preprocessed"
+nnUNet_raw="nnUNet_raw"
+nnUNet_preprocessed="nnUNet_preprocessed"
 
 export nnUNet_raw=$nnUNet_raw
 export nnUNet_preprocessed=$nnUNet_preprocessed
 
-train=1
-eval=0
+train=0
+eval=1
 train_dataset_name="Dataset073_GE_LE"
 model="CMUNeXt-S"
 fold=0
@@ -22,6 +22,7 @@ echo "fold: $fold"
 
 # Evaluation settings
 test_datasets=("Dataset073_GE_LE" "Dataset072_GE_LQP9" "Dataset070_Clarius_L15" "Dataset078_KneeUS_OtherDevices")
+save_preds=1
 
 if [[ $train -eq 1 ]]; then
     echo "Training..."
@@ -29,4 +30,23 @@ if [[ $train -eq 1 ]]; then
         --model $model \
         --train_dataset_name $train_dataset_name \
         --fold $fold
+fi
+
+if [[ $eval -eq 1 ]]; then
+    for test_dataset in ${test_datasets[@]}; do
+        echo "Evaluating $test_dataset"
+        if [[ $test_dataset == "Dataset078_KneeUS_OtherDevices" ]]; then
+            test_split="Ts"
+        else
+            test_split="Tr"
+        fi
+        python main.py \
+            --model $model \
+            --train_dataset_name $train_dataset_name \
+            --fold $fold \
+            --test_dataset $test_dataset \
+            --test_split $test_split \
+            --eval 1 \
+            --save_preds $save_preds
+    done
 fi
