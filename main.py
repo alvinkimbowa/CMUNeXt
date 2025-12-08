@@ -201,7 +201,7 @@ def train(args):
                avg_meters['PC'].avg, avg_meters['F1'].avg, avg_meters['ACC'].avg))
         
         fold_str = str(args.fold)
-        model_dir = f"models/{args.train_dataset_name}/fold_{fold_str}"
+        model_dir = f"models/{args.train_dataset_name}/{args.model}/fold_{fold_str}"
         os.makedirs(model_dir, exist_ok=True)
 
         if avg_meters['val_iou'].avg > best_iou:
@@ -217,7 +217,7 @@ def train(args):
 
 def eval(args):
     model = get_model(args)
-    model_dir = f"models/{args.train_dataset_name}/fold_{args.fold}"
+    model_dir = f"models/{args.train_dataset_name}/{args.model}/fold_{args.fold}"
     model.load_state_dict(torch.load(f'{model_dir}/checkpoint_best.pth'))
     valloader = get_test_dataloader(args)
 
