@@ -12,6 +12,7 @@ from dataloader.dataset import MedicalDataSets, CMUNeXt_nnUNetDataset
 from albumentations.augmentations import transforms
 from albumentations.core.composition import Compose
 from albumentations import RandomRotate90, Resize, Flip
+from albumentations.augmentations.geometric.transforms import Affine
 
 from monai.metrics import DiceMetric, HausdorffDistanceMetric, SurfaceDistanceMetric
 from scipy.ndimage import label
@@ -52,17 +53,25 @@ parser.add_argument('--eval', type=int, default=0, help='eval')
 parser.add_argument('--test_dataset', type=str, default="Dataset073_GE_LE", help='test dataset name')
 parser.add_argument('--test_split', type=str, default="Tr", help='test split')
 parser.add_argument('--save_preds', type=int, default=0, help='save preds')
+parser.add_argument('--data_augmentation', type=bool, default=False, help='data augmentation')
 args = parser.parse_args()
 
 
 def getDataloader(args):
     img_size = 256
-    train_transform = Compose([
-        RandomRotate90(),
-        Flip(),
-        Resize(img_size, img_size),
-        transforms.Normalize(),
-    ])
+    if args.data_augmentation:
+        train_transform = Compose([
+            Affine(rotate=(-15, 15), scale=(0.8, 1.2), p=0.8),
+            Resize(img_size, img_size),
+            transforms.Normalize(),
+        ])
+    else:
+        train_transform = Compose([
+            RandomRotate90(),
+            Flip(),
+            Resize(img_size, img_size),
+            transforms.Normalize(),
+        ])
 
     val_transform = Compose([
         Resize(img_size, img_size),
@@ -201,7 +210,10 @@ def train(args):
                avg_meters['PC'].avg, avg_meters['F1'].avg, avg_meters['ACC'].avg))
         
         fold_str = str(args.fold)
-        model_dir = f"models/{args.model}/{args.train_dataset_name}/fold_{fold_str}"
+        if args.data_augmentation:
+            model_dir = f"models/{args.model}DA/{args.train_dataset_name}/fold_{fold_str}"
+        else:
+            model_dir = f"models/{args.model}/{args.train_dataset_name}/fold_{fold_str}"
         os.makedirs(model_dir, exist_ok=True)
 
         if avg_meters['val_iou'].avg > best_iou:
@@ -217,7 +229,11 @@ def train(args):
 
 def eval(args):
     model = get_model(args)
-    model_dir = f"models/{args.model}/{args.train_dataset_name}/fold_{args.fold}"
+    if args.data_augmentation:
+        model_dir = f"models/{args.model}DA/{args.train_dataset_name}/fold_{args.fold}"
+    else:
+        model_dir = f"models/{args.model}/{args.train_dataset_name}/fold_{args.fold}"
+    
     model.load_state_dict(torch.load(f'{model_dir}/checkpoint_best.pth'))
     valloader = get_test_dataloader(args)
 

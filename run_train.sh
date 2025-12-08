@@ -6,11 +6,12 @@ nnUNet_preprocessed="nnUNet_preprocessed"
 export nnUNet_raw=$nnUNet_raw
 export nnUNet_preprocessed=$nnUNet_preprocessed
 
-train=0
+train=1
 eval=1
 train_dataset_name="Dataset073_GE_LE"
 model="CMUNeXt-S"
 fold=0
+data_augmentation=True
 
 echo "nnUNet_raw: $nnUNet_raw"
 echo "nnUNet_preprocessed: $nnUNet_preprocessed"
@@ -19,6 +20,7 @@ echo "eval: $eval"
 echo "train_dataset_name: $train_dataset_name"
 echo "model: $model"
 echo "fold: $fold"
+echo "data_augmentation: $data_augmentation"
 
 # Evaluation settings
 test_datasets=("Dataset073_GE_LE" "Dataset072_GE_LQP9" "Dataset070_Clarius_L15" "Dataset078_KneeUS_OtherDevices")
@@ -29,7 +31,8 @@ if [[ $train -eq 1 ]]; then
     python main.py \
         --model $model \
         --train_dataset_name $train_dataset_name \
-        --fold $fold
+        --fold $fold \
+        --data_augmentation $data_augmentation
 fi
 
 if [[ $eval -eq 1 ]]; then
@@ -47,6 +50,7 @@ if [[ $eval -eq 1 ]]; then
             --test_dataset $test_dataset \
             --test_split $test_split \
             --eval 1 \
-            --save_preds $save_preds
+            --save_preds $save_preds \
+            --data_augmentation $data_augmentation
     done
 fi
