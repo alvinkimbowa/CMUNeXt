@@ -40,6 +40,16 @@ def seed_torch(seed):
 
 seed_torch(41)
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--model', type=str, default="CMUNeXt",
                     choices=["CMUNeXt", "CMUNeXt-S", "CMUNeXt-L"], help='model')
@@ -52,8 +62,10 @@ parser.add_argument('--batch_size', type=int, default=8,
 parser.add_argument('--eval', type=int, default=0, help='eval')
 parser.add_argument('--test_dataset', type=str, default="Dataset073_GE_LE", help='test dataset name')
 parser.add_argument('--test_split', type=str, default="Tr", help='test split')
-parser.add_argument('--save_preds', type=int, default=0, help='save preds')
-parser.add_argument('--data_augmentation', type=bool, default=False, help='data augmentation')
+parser.add_argument('--save_preds', type=str2bool, default=False, help='save preds')
+parser.add_argument('--data_augmentation', type=str2bool, default=False, help='data augmentation')
+parser.add_argument('--largest_component', type=str2bool, default=False, help='largest component')
+parser.add_argument('--num_classes', type=int, default=1, help='number of classes')
 args = parser.parse_args()
 
 
@@ -226,6 +238,17 @@ def train(args):
     
     return "Training Finished!"
 
+def find_largest_component_per_class(segmentation, num_classes):
+    output = np.zeros_like(segmentation)
+    for i in range(segmentation.shape[0]):
+        for cls in range(1, num_classes):  # skip background class 0
+            binary_mask = (segmentation[i] == cls).astype(np.uint8)
+            labeled_array, num_features = label(binary_mask)
+            if num_features == 0:
+                continue
+            largest_label = max(range(1, num_features + 1), key=lambda x: np.sum(labeled_array == x))
+            output[i][labeled_array == largest_label] = cls
+    return output
 
 def eval(args):
     model = get_model(args)
@@ -253,6 +276,11 @@ def eval(args):
             output = torch.sigmoid(output)
             output = (output > 0.5).float()
 
+            if args.largest_component:
+                output = output.cpu().numpy()
+                output = find_largest_component_per_class(output, args.num_classes + 1)
+                output = torch.from_numpy(output)
+
             dice_metric(output, label)
             hd95_metric(output, label)
             surface_dice_metric(output, label)
@@ -278,7 +306,7 @@ def eval(args):
         print(f"MASD: {masd_score:.2f} ± {masd_std:.2f}")
 
         # Save to CSV
-        results_csv_path = f"{model_dir}/test/results.csv"
+        results_csv_path = f"{model_dir}/test/results{'_largest_component' if args.largest_component else ''}.csv"
         os.makedirs(os.path.dirname(results_csv_path), exist_ok=True)
         csv_exists = os.path.exists(results_csv_path)
         with open(results_csv_path, 'a', newline='') as csvfile:

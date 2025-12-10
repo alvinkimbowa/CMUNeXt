@@ -8,11 +8,16 @@ export nnUNet_preprocessed=$nnUNet_preprocessed
 
 train=0
 eval=0
-analyze=1
-train_dataset_name="Dataset073_GE_LE"
+analyze=0
+train_dataset_name="Dataset072_GE_LQP9"
 model="CMUNeXt-S"
-fold=0
-data_augmentation=True
+fold=4
+data_augmentation=true
+num_classes=1
+# Evaluation settings
+test_datasets=("Dataset072_GE_LQP9" "Dataset073_GE_LE" "Dataset070_Clarius_L15" "Dataset078_KneeUS_OtherDevices")
+save_preds=false
+largest_component=true
 # Analysis defaults
 input_channels=3
 gpu=0
@@ -25,10 +30,15 @@ echo "train_dataset_name: $train_dataset_name"
 echo "model: $model"
 echo "fold: $fold"
 echo "data_augmentation: $data_augmentation"
-
-# Evaluation settings
-test_datasets=("Dataset073_GE_LE" "Dataset072_GE_LQP9" "Dataset070_Clarius_L15" "Dataset078_KneeUS_OtherDevices")
-save_preds=1
+echo "largest_component: $largest_component"
+echo "save_preds: $save_preds"
+echo "test_datasets: ${test_datasets[@]}"
+echo "test_split: $test_split"
+echo "gpu: $gpu"
+echo "input_channels: $input_channels"
+echo "num_classes: $num_classes"
+echo "input_h: $input_h"
+echo "input_w: $input_w"
 
 if [[ $train -eq 1 ]]; then
     echo "Training..."
@@ -55,7 +65,9 @@ if [[ $eval -eq 1 ]]; then
             --test_split $test_split \
             --eval 1 \
             --save_preds $save_preds \
-            --data_augmentation $data_augmentation
+            --data_augmentation $data_augmentation \
+            --largest_component $largest_component \
+            --num_classes $num_classes
     done
 fi
 
