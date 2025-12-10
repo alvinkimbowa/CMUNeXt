@@ -82,6 +82,9 @@ if [[ $analyze -eq 1 ]]; then
     
     # Save analysis to model directory if it exists
     model_dir="models/$current_arch"
+    if [[ $data_augmentation == true ]]; then
+        model_dir="${model_dir}DA"
+    fi
     if [[ -d "$model_dir" ]]; then
         analyze_args="$analyze_args --save_path $model_dir/model_analysis.json"
     fi
