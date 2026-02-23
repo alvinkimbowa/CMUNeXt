@@ -46,6 +46,8 @@ if [[ $train -eq 1 ]]; then
         --model $model \
         --train_dataset_name $train_dataset_name \
         --fold $fold \
+        --num_classes $num_classes \
+        --input_channels $input_channels \
         --data_augmentation $data_augmentation
 fi
 
@@ -67,7 +69,8 @@ if [[ $eval -eq 1 ]]; then
             --save_preds $save_preds \
             --data_augmentation $data_augmentation \
             --largest_component $largest_component \
-            --num_classes $num_classes
+                --num_classes $num_classes \
+                --input_channels $input_channels
     done
 fi
 
