@@ -3,7 +3,7 @@ import cv2
 import json
 from glob import glob
 from torch.utils.data import Dataset
-
+import numpy as np
 
 class MedicalDataSets(Dataset):
     def __init__(
@@ -57,8 +57,11 @@ class MedicalDataSets(Dataset):
 
 
 class CMUNeXt_nnUNetDataset(Dataset):
-    def __init__(self, dataset_name, split, fold=None, split_type='train', transform=None, eval=False):
+    def __init__(self, dataset_name, split, input_channels=3, num_classes=1, fold=None, split_type='train', transform=None, eval=False):
         self.transform = transform
+        self.input_channels = input_channels
+        self.num_classes = num_classes
+        self.eval = eval
         
         nnunet_raw = os.environ['nnUNet_raw']
         nnunet_preprocessed = os.environ['nnUNet_preprocessed']
@@ -96,18 +99,48 @@ class CMUNeXt_nnUNetDataset(Dataset):
         img_filename = f'{self.img_dir}/{img_id}_0000{self.img_ext}'
         label_filename = f'{self.label_dir}/{img_id}{self.img_ext}'
         
-        img = cv2.imread(os.path.join(self.img_dir, img_filename))
-        mask = cv2.imread(os.path.join(self.label_dir, label_filename), cv2.IMREAD_GRAYSCALE)[..., None]
+        # Determine if other channels exist
+        other_chs = [ch for ch in glob(f'{self.img_dir}/{img_id}_*{self.img_ext}') if ch != img_filename]
+        other_chs = sorted(other_chs)
+
+        # Load channels expected by the model.
+        # Keep deterministic order: _0000, _0001, ...
+        all_channels = [img_filename] + other_chs
+        if len(all_channels) < self.input_channels:
+            raise ValueError(
+                f"Sample {img_id} has {len(all_channels)} channels, "
+                f"but input_channels={self.input_channels}."
+            )
+        selected_channels = all_channels[:self.input_channels]
+        imgs = [cv2.imread(ch, cv2.IMREAD_GRAYSCALE)[..., None] for ch in selected_channels]
+        img = np.concatenate(imgs, axis=-1)
+        
+        if os.path.exists(label_filename):
+            mask = cv2.imread(label_filename, cv2.IMREAD_GRAYSCALE)
+            if self.num_classes > 1:
+                masks = []
+                for i in range(self.num_classes):
+                    masks.append((mask == (i + 1)).astype('float32')[..., None])
+                mask = np.dstack(masks)
+            else:
+                mask = mask[..., None]
+        elif self.eval:
+            if self.num_classes > 1:
+                mask = np.zeros((img.shape[0], img.shape[1], self.num_classes), dtype='float32')
+            else:
+                mask = np.zeros(img.shape[:2])[..., None]
+        else:
+            raise ValueError(f"Label file not found: {label_filename}")
         
         if self.transform is not None:
             augmented = self.transform(image=img, mask=mask)
             img = augmented['image']
             mask = augmented['mask']
-        
-        img = img.astype('float32') / 255
+
+        img = img.astype('float32')
         img = img.transpose(2, 0, 1)
         mask = mask.astype('float32')
-        mask = mask.transpose(2, 0, 1)   
+        mask = mask.transpose(2, 0, 1)
         
         sample = {"image": img, "label": mask, "case": img_id}
         return sample
