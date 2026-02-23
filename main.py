@@ -66,6 +66,7 @@ parser.add_argument('--save_preds', type=str2bool, default=False, help='save pre
 parser.add_argument('--data_augmentation', type=str2bool, default=False, help='data augmentation')
 parser.add_argument('--largest_component', type=str2bool, default=False, help='largest component')
 parser.add_argument('--num_classes', type=int, default=1, help='number of classes')
+parser.add_argument('--input_channels', type=int, default=3, help='number of input image channels')
 args = parser.parse_args()
 
 
@@ -92,6 +93,8 @@ def getDataloader(args):
     db_train = CMUNeXt_nnUNetDataset(
         dataset_name=args.train_dataset_name,
         split="Tr",
+        input_channels=args.input_channels,
+        num_classes=args.num_classes,
         fold=args.fold,
         split_type="train",
         transform=train_transform,
@@ -99,6 +102,8 @@ def getDataloader(args):
     db_val = CMUNeXt_nnUNetDataset(
         dataset_name=args.train_dataset_name,
         split="Tr",
+        input_channels=args.input_channels,
+        num_classes=args.num_classes,
         fold=args.fold,
         split_type="val",
         transform=val_transform,
@@ -124,6 +129,8 @@ def get_test_dataloader(args):
         db_test = CMUNeXt_nnUNetDataset(
             dataset_name=args.test_dataset,
             split=args.test_split,
+            input_channels=args.input_channels,
+            num_classes=args.num_classes,
             fold=args.fold,
             split_type='val',
             transform=val_transform,
@@ -132,6 +139,8 @@ def get_test_dataloader(args):
         db_test = CMUNeXt_nnUNetDataset(
             dataset_name=args.test_dataset,
             split=args.test_split,
+            input_channels=args.input_channels,
+            num_classes=args.num_classes,
             transform=val_transform,
             eval=True)
     
@@ -142,11 +151,11 @@ def get_test_dataloader(args):
 
 def get_model(args):
     if args.model == "CMUNeXt":
-        model = cmunext()
+        model = cmunext(input_channel=args.input_channels, num_classes=args.num_classes)
     elif args.model == "CMUNeXt-S":
-        model = cmunext_s()
+        model = cmunext_s(input_channel=args.input_channels, num_classes=args.num_classes)
     elif args.model == "CMUNeXt-L":
-        model = cmunext_l()
+        model = cmunext_l(input_channel=args.input_channels, num_classes=args.num_classes)
     else:
         model = None
         print("model err")

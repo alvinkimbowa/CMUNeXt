@@ -149,13 +149,13 @@ class CMUNeXt(nn.Module):
         return d1
 
 
-def cmunext(dims=[16, 32, 128, 160, 256], depths=[1, 1, 1, 3, 1], kernels=[3, 3, 7, 7, 7]):
-    return CMUNeXt(dims=dims, depths=depths, kernels=kernels)
+def cmunext(input_channel=3, num_classes=1, dims=[16, 32, 128, 160, 256], depths=[1, 1, 1, 3, 1], kernels=[3, 3, 7, 7, 7]):
+    return CMUNeXt(input_channel=input_channel, num_classes=num_classes, dims=dims, depths=depths, kernels=kernels)
 
 
-def cmunext_s(dims=[8, 16, 32, 64, 128], depths=[1, 1, 1, 1, 1], kernels=[3, 3, 7, 7, 9]):
-    return CMUNeXt(dims=dims, depths=depths, kernels=kernels)
+def cmunext_s(input_channel=3, num_classes=1, dims=[8, 16, 32, 64, 128], depths=[1, 1, 1, 1, 1], kernels=[3, 3, 7, 7, 9]):
+    return CMUNeXt(input_channel=input_channel, num_classes=num_classes, dims=dims, depths=depths, kernels=kernels)
 
 
-def cmunext_l(dims=[32, 64, 128, 256, 512], depths=[1, 1, 1, 6, 3], kernels=[3, 3, 7, 7, 7]):
-    return CMUNeXt(dims=dims, depths=depths, kernels=kernels)
+def cmunext_l(input_channel=3, num_classes=1, dims=[32, 64, 128, 256, 512], depths=[1, 1, 1, 6, 3], kernels=[3, 3, 7, 7, 7]):
+    return CMUNeXt(input_channel=input_channel, num_classes=num_classes, dims=dims, depths=depths, kernels=kernels)
