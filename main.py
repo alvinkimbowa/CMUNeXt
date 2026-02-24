@@ -124,7 +124,7 @@ def get_test_dataloader(args):
         Resize(img_size, img_size),
         transforms.Normalize(),
     ])
-    if args.test_dataset == args.train_dataset_name:
+    if args.test_dataset == args.train_dataset_name and args.test_split == "Tr":
         assert args.fold != 'all', "TODO: Implement validation for all folds"
         db_test = CMUNeXt_nnUNetDataset(
             dataset_name=args.test_dataset,
