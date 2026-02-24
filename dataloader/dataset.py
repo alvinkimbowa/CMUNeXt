@@ -4,6 +4,7 @@ import json
 from glob import glob
 from torch.utils.data import Dataset
 import numpy as np
+import nibabel as nib
 
 class MedicalDataSets(Dataset):
     def __init__(
@@ -57,11 +58,24 @@ class MedicalDataSets(Dataset):
 
 
 class CMUNeXt_nnUNetDataset(Dataset):
-    def __init__(self, dataset_name, split, input_channels=3, num_classes=1, fold=None, split_type='train', transform=None, eval=False):
+    def __init__(
+        self,
+        dataset_name,
+        split,
+        input_channels=3,
+        num_classes=1,
+        fold=None,
+        split_type='train',
+        transform=None,
+        eval=False,
+        oversample_foreground_percent=0.33,
+    ):
         self.transform = transform
         self.input_channels = input_channels
         self.num_classes = num_classes
         self.eval = eval
+        self.split_type = split_type
+        self.oversample_foreground_percent = oversample_foreground_percent
         
         nnunet_raw = os.environ['nnUNet_raw']
         nnunet_preprocessed = os.environ['nnUNet_preprocessed']
@@ -72,9 +86,18 @@ class CMUNeXt_nnUNetDataset(Dataset):
             dataset_info = json.load(f)
         self.img_ext = dataset_info['file_ending']
         
-        if eval:
+        if self.eval:
             img_ids = glob(f'{self.img_dir}/*{self.img_ext}')
-            self.img_ids = [os.path.basename(img_id).rsplit('.', 1)[0].replace('_0000', '') for img_id in img_ids]
+            parsed_ids = []
+            for img_id in img_ids:
+                base = os.path.basename(img_id)
+                stem = base[:-len(self.img_ext)]
+                parts = stem.rsplit('_', 1)
+                if len(parts) == 2 and parts[1].isdigit():
+                    parsed_ids.append(parts[0])
+                else:
+                    parsed_ids.append(stem)
+            self.img_ids = sorted(list(set(parsed_ids)))
         else:
             with open(os.path.join(f'{nnunet_preprocessed}/{dataset_name}/splits_final.json'), 'r') as f:
                 splits = json.load(f)
@@ -103,20 +126,54 @@ class CMUNeXt_nnUNetDataset(Dataset):
         other_chs = [ch for ch in glob(f'{self.img_dir}/{img_id}_*{self.img_ext}') if ch != img_filename]
         other_chs = sorted(other_chs)
 
-        # Load channels expected by the model.
-        # Keep deterministic order: _0000, _0001, ...
-        all_channels = [img_filename] + other_chs
-        if len(all_channels) < self.input_channels:
-            raise ValueError(
-                f"Sample {img_id} has {len(all_channels)} channels, "
-                f"but input_channels={self.input_channels}."
+        if self.img_ext in ['.nii.gz', '.nii']:
+            imgs = [nib.load(img_filename).get_fdata()]
+            for ch in other_chs:
+                imgs.append(nib.load(ch).get_fdata())
+
+            seg_vol = None
+            if os.path.exists(label_filename):
+                seg_vol = nib.load(label_filename).get_fdata()
+            elif not self.eval:
+                raise ValueError(f"Label file not found: {label_filename}")
+
+            force_fg = None
+            if self.eval or self.split_type != 'train':
+                force_fg = False
+
+            _, seg_slice, z_idx, _ = sample_2d_slice_from_hwd_nnunet_style(
+                imgs[0],
+                seg_vol,
+                oversample_foreground_percent=self.oversample_foreground_percent,
+                force_fg=force_fg
             )
-        selected_channels = all_channels[:self.input_channels]
-        imgs = [cv2.imread(ch, cv2.IMREAD_GRAYSCALE)[..., None] for ch in selected_channels]
-        img = np.concatenate(imgs, axis=-1)
+
+            stacked = []
+            for vol in imgs:
+                if vol.ndim == 3:
+                    sl = vol[:, :, z_idx]
+                else:
+                    sl = vol
+                stacked.append(sl[..., None].astype('float32'))
+            img = np.concatenate(stacked, axis=-1)
+            if self.input_channels == 3 and img.shape[-1] == 1:
+                img = np.repeat(img, 3, axis=-1)
+        else:
+            # Match reference behavior for 2D files:
+            # if only one input channel exists and model expects RGB, load as 3-channel image.
+            if self.input_channels == 3 and len(other_chs) == 0:
+                img = cv2.imread(img_filename)
+            else:
+                imgs = [cv2.imread(img_filename, cv2.IMREAD_GRAYSCALE)[..., None]]
+                for ch in other_chs:
+                    imgs.append(cv2.imread(ch, cv2.IMREAD_GRAYSCALE)[..., None])
+                img = np.concatenate(imgs, axis=-1)
         
         if os.path.exists(label_filename):
-            mask = cv2.imread(label_filename, cv2.IMREAD_GRAYSCALE)
+            if self.img_ext in ['.nii.gz', '.nii']:
+                mask = seg_slice
+            else:
+                mask = cv2.imread(label_filename, cv2.IMREAD_GRAYSCALE)
             if self.num_classes > 1:
                 masks = []
                 for i in range(self.num_classes):
@@ -144,3 +201,33 @@ class CMUNeXt_nnUNetDataset(Dataset):
         
         sample = {"image": img, "label": mask, "case": img_id}
         return sample
+
+
+def sample_2d_slice_from_hwd_nnunet_style(volume_hwd, seg_hwd=None, oversample_foreground_percent=0.33, force_fg=None):
+    if volume_hwd.ndim != 3:
+        raise ValueError("volume_hwd must have shape (H,W,D)")
+
+    d = volume_hwd.shape[2]
+    seg_dhw = None
+    if seg_hwd is not None:
+        if seg_hwd.ndim != 3:
+            raise ValueError("seg_hwd must have shape (H,W,D)")
+        if seg_hwd.shape != volume_hwd.shape:
+            raise ValueError("seg_hwd and volume_hwd must have the same shape")
+        seg_dhw = np.transpose(seg_hwd, (2, 0, 1))
+
+    if force_fg is None:
+        force_fg = np.random.uniform() < float(oversample_foreground_percent)
+
+    z_idx = None
+    if force_fg and seg_dhw is not None:
+        fg_voxels = np.argwhere(seg_dhw > 0)
+        if len(fg_voxels) > 0:
+            z_idx = int(fg_voxels[np.random.choice(len(fg_voxels)), 0])
+
+    if z_idx is None:
+        z_idx = int(np.random.randint(0, d))
+
+    image_slice = volume_hwd[:, :, z_idx]
+    seg_slice = seg_hwd[:, :, z_idx] if seg_hwd is not None else None
+    return image_slice, seg_slice, z_idx, force_fg
