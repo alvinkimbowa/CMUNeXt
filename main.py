@@ -3,6 +3,8 @@ import csv
 import cv2
 import random
 import argparse
+import json
+import nibabel as nib
 import numpy as np
 import torch
 import torch.optim as optim
@@ -16,10 +18,11 @@ from albumentations.augmentations.geometric.transforms import Affine
 
 from monai.metrics import DiceMetric, HausdorffDistanceMetric, SurfaceDistanceMetric
 from scipy.ndimage import label
+import torch.nn.functional as F
 
 from utils.util import AverageMeter
 import utils.losses as losses
-from utils.metrics import iou_score
+from utils.metrics import iou_score, prepare_target_for_loss
 
 from network.CMUNeXt import cmunext, cmunext_s, cmunext_l
 from tqdm import tqdm
@@ -67,8 +70,70 @@ parser.add_argument('--data_augmentation', type=str2bool, default=False, help='d
 parser.add_argument('--largest_component', type=str2bool, default=False, help='largest component')
 parser.add_argument('--num_classes', type=int, default=1, help='number of classes')
 parser.add_argument('--input_channels', type=int, default=3, help='number of input image channels')
+parser.add_argument('--label_mode', type=str, default='multiclass', choices=['multiclass', 'multilabel'], help='label mode')
 args = parser.parse_args()
 
+
+def _load_multilabel_regions(dataset_name):
+    nnunet_preprocessed = os.environ['nnUNet_preprocessed']
+    nnunet_raw = os.environ.get('nnUNet_raw', None)
+
+    candidates = [os.path.join(f'{nnunet_preprocessed}/{dataset_name}/dataset.json')]
+    if nnunet_raw is not None:
+        candidates.append(os.path.join(f'{nnunet_raw}/{dataset_name}/dataset.json'))
+
+    dataset_json = None
+    for p in candidates:
+        if os.path.exists(p):
+            dataset_json = p
+            break
+    if dataset_json is None:
+        raise FileNotFoundError(f"Could not find dataset.json in: {candidates}")
+
+    with open(dataset_json, 'r') as f:
+        dataset_info = json.load(f)
+
+    labels = dataset_info.get('labels', {})
+    regions_class_order = dataset_info.get('regions_class_order', None)
+
+    regions = []
+    for k, v in labels.items():
+        if str(k).lower() == 'background':
+            continue
+        if isinstance(v, (list, tuple)):
+            regions.append((str(k), tuple(int(x) for x in v)))
+
+    if not regions:
+        raise ValueError("multilabel mode requires region-style labels in dataset.json.")
+
+    if regions_class_order is not None:
+        by_first = {}
+        for name, vals in regions:
+            if len(vals) > 0:
+                by_first[int(vals[0])] = (name, vals)
+        ordered = []
+        used = set()
+        for c in regions_class_order:
+            c = int(c)
+            if c in by_first:
+                name, vals = by_first[c]
+                ordered.append((name, vals))
+                used.add(name)
+        for name, vals in regions:
+            if name not in used:
+                ordered.append((name, vals))
+        regions = ordered
+
+    return [vals for _, vals in regions]
+
+
+def _to_finite_scalar(x, default=0.0):
+    if isinstance(x, torch.Tensor):
+        x = x.detach().float().mean().item()
+    x = float(x)
+    if np.isnan(x) or np.isinf(x):
+        return float(default)
+    return x
 
 def getDataloader(args):
     img_size = 256
@@ -168,7 +233,17 @@ def train(args):
     trainloader, valloader = getDataloader(args)
     model = get_model(args)
     optimizer = optim.SGD(model.parameters(), lr=base_lr, momentum=0.9, weight_decay=0.0001)
-    criterion = losses.__dict__['BCEDiceLoss']().cuda()
+    region_label_values = None
+    if args.label_mode == 'multilabel':
+        region_label_values = _load_multilabel_regions(args.train_dataset_name)
+        if len(region_label_values) != args.num_classes:
+            raise ValueError(
+                f"multilabel mode expects num_classes={len(region_label_values)} "
+                f"from dataset.json regions, got {args.num_classes}"
+            )
+        criterion = losses.__dict__['BCEDiceLoss']().cuda()
+    else:
+        criterion = losses.__dict__['BCEDiceLoss']().cuda() if args.num_classes == 1 else losses.__dict__['CEDiceLoss']().cuda()
     print("{} iterations per epoch".format(len(trainloader)))
     best_iou = 0
     iter_num = 0
@@ -189,11 +264,24 @@ def train(args):
 
             volume_batch, label_batch = sampled_batch['image'], sampled_batch['label']
             volume_batch, label_batch = volume_batch.cuda(), label_batch.cuda()
+            label_for_loss = prepare_target_for_loss(
+                label_batch,
+                args.label_mode,
+                args.num_classes,
+                region_label_values=region_label_values,
+            )
 
             outputs = model(volume_batch)
             
-            loss = criterion(outputs, label_batch)
-            iou, dice, _, _, _, _, _ = iou_score(outputs, label_batch)
+            loss = criterion(outputs, label_for_loss)
+            iou, dice, _, _, _, _, _ = iou_score(
+                outputs,
+                label_batch,
+                label_mode=args.label_mode,
+                region_label_values=region_label_values,
+            )
+            iou = _to_finite_scalar(iou)
+            dice = _to_finite_scalar(dice)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -212,10 +300,27 @@ def train(args):
                 input, target = sampled_batch['image'], sampled_batch['label']
                 input = input.cuda()
                 target = target.cuda()
+                target_for_loss = prepare_target_for_loss(
+                    target,
+                    args.label_mode,
+                    args.num_classes,
+                    region_label_values=region_label_values,
+                )
                 output = model(input)
-                loss = criterion(output, target)
+                loss = criterion(output, target_for_loss)
                 
-                iou, _, SE, PC, F1, _, ACC = iou_score(output, target)
+                iou, dice, SE, PC, F1, _, ACC = iou_score(
+                    output,
+                    target,
+                    label_mode=args.label_mode,
+                    region_label_values=region_label_values,
+                )
+                iou = _to_finite_scalar(iou)
+                dice = _to_finite_scalar(dice)
+                SE = _to_finite_scalar(SE)
+                PC = _to_finite_scalar(PC)
+                F1 = _to_finite_scalar(F1)
+                ACC = _to_finite_scalar(ACC)
                 avg_meters['val_loss'].update(loss.item(), input.size(0))
                 avg_meters['val_iou'].update(iou, input.size(0))
                 avg_meters['SE'].update(SE, input.size(0))
