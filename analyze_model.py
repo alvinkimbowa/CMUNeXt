@@ -59,11 +59,11 @@ def analyze_model(arch, input_channels=1, num_classes=2, input_h=256, input_w=25
     
     # Load model (mirror main.py get_model without importing it to avoid arg parsing there)
     if arch == "CMUNeXt":
-        model = cmunext()
+        model = cmunext(input_channel=input_channels, num_classes=num_classes)
     elif arch == "CMUNeXt-S":
-        model = cmunext_s()
+        model = cmunext_s(input_channel=input_channels, num_classes=num_classes)
     elif arch == "CMUNeXt-L":
-        model = cmunext_l()
+        model = cmunext_l(input_channel=input_channels, num_classes=num_classes)
     else:
         raise ValueError(f"Unsupported architecture: {arch}")
     model = model.to(device)
