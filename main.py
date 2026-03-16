@@ -67,6 +67,7 @@ parser.add_argument('--ckpt', type=str, default="checkpoint_best.pth", help='che
 parser.add_argument('--test_dataset', type=str, default="Dataset073_GE_LE", help='test dataset name')
 parser.add_argument('--test_split', type=str, default="Tr", help='test split')
 parser.add_argument('--save_preds', type=str2bool, default=False, help='save preds')
+parser.add_argument('--overlay', type=str2bool, default=False, help='save overlay visualizations')
 parser.add_argument('--data_augmentation', type=str2bool, default=False, help='data augmentation')
 parser.add_argument('--largest_component', type=str2bool, default=False, help='largest component')
 parser.add_argument('--num_classes', type=int, default=1, help='number of classes')
@@ -230,7 +231,8 @@ def get_test_dataloader(args):
             fold=args.fold,
             split_type='val',
             transform=val_transform,
-            eval=False)
+            eval=False,
+            return_full_volume=True)
     else:
         db_test = CMUNeXt_nnUNetDataset(
             dataset_name=args.test_dataset,
@@ -238,10 +240,14 @@ def get_test_dataloader(args):
             input_channels=args.input_channels,
             num_classes=args.num_classes,
             transform=val_transform,
-            eval=True)
-    
-    testloader = DataLoader(db_test, batch_size=8, shuffle=False,
-                           num_workers=8)
+            eval=True,
+            return_full_volume=True)
+
+    is_volume_eval = db_test.img_ext in ['.nii.gz', '.nii'] and db_test.return_full_volume
+    test_batch_size = 1 if is_volume_eval else 8
+    test_num_workers = 1 if is_volume_eval else 8
+    testloader = DataLoader(db_test, batch_size=test_batch_size, shuffle=False,
+                           num_workers=test_num_workers)
     return testloader
 
 
@@ -257,6 +263,55 @@ def get_model(args):
         print("model err")
         exit(0)
     return model.cuda()
+
+
+def visualize_prediction(img, pred, gt=None, dice=None, masd=None, hd95=None, save_path=None):
+    """
+    Visualize prediction overlaid on input image with optional ground truth and metrics.
+    
+    Args:
+        img: Input image as numpy array (H, W) for grayscale or (H, W, 3) for RGB
+        pred: Prediction mask as numpy array (H, W) with values 0 or 1
+        gt: Optional ground truth mask as numpy array (H, W) with values 0 or 1
+        dice: Optional dice score (0-100)
+        masd: Optional MASD score
+        hd95: Optional HD95 score
+        save_path: Path to save the visualized image
+    """
+    plt.figure(figsize=(4, 4))
+    plt.imshow(img, cmap='gray')
+    
+    if gt is not None and gt.max() > 0:
+        plt.contour(gt, colors='#90EE90', linewidths=1)
+    
+    # Overlay prediction (red)
+    plt.contour(pred, colors='#FF0000', linewidths=1)
+    
+    # Add metrics text at bottom left
+    metrics_text = []
+    if dice is not None:
+        metrics_text.append(f'Dice: {dice*100:.2f}%')
+    if masd is not None:
+        metrics_text.append(f'MASD: {masd:.2f}')
+    if hd95 is not None:
+        metrics_text.append(f'HD95: {hd95:.2f}')
+        
+    text_str = '\n'.join(metrics_text)
+    img_height, img_width = img.shape[:2]
+        
+    plt.text(img_width * 0.02, img_height * 0.98, text_str,
+            fontsize=10, color='white',
+            verticalalignment='bottom',
+            bbox=dict(boxstyle='round,pad=0.5', facecolor='black'))
+    
+    plt.axis('off')
+    plt.tight_layout()
+    
+    if save_path:
+        print("Saving prediction to: ", save_path)
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, bbox_inches='tight', pad_inches=0, dpi=300)
+    plt.close()
 
 
 def train(args):
@@ -430,17 +485,49 @@ def train(args):
     
     return "Training Finished!"
 
+def logits_to_pred_mask(logits, num_classes):
+    if num_classes == 1:
+        return (torch.sigmoid(logits) > 0.5).float()
+    return torch.argmax(logits, dim=1).long()
+
+
 def find_largest_component_per_class(segmentation, num_classes):
-    output = np.zeros_like(segmentation)
-    for i in range(segmentation.shape[0]):
-        for cls in range(1, num_classes):  # skip background class 0
-            binary_mask = (segmentation[i] == cls).astype(np.uint8)
+    label_map = segmentation.astype(np.uint8)
+    output = np.zeros_like(label_map)
+    for i in range(label_map.shape[0]):
+        for cls in range(1, num_classes):
+            binary_mask = (label_map[i] == cls).astype(np.uint8)
             labeled_array, num_features = label(binary_mask)
             if num_features == 0:
                 continue
             largest_label = max(range(1, num_features + 1), key=lambda x: np.sum(labeled_array == x))
             output[i][labeled_array == largest_label] = cls
     return output
+
+
+def find_largest_component_per_channel(segmentation):
+    output = np.zeros_like(segmentation)
+    for i in range(segmentation.shape[0]):
+        for c in range(segmentation.shape[1]):
+            binary_mask = segmentation[i, c].astype(np.uint8)
+            labeled_array, num_features = label(binary_mask)
+            if num_features == 0:
+                continue
+            largest_label = max(range(1, num_features + 1), key=lambda x: np.sum(labeled_array == x))
+            output[i, c][labeled_array == largest_label] = 1
+    return output
+
+
+def label_to_one_hot(label, num_classes):
+    if num_classes == 1:
+        if label.ndim == 3:
+            label = label.unsqueeze(1)
+        return label.float()
+    if label.ndim == 4 and label.shape[1] == num_classes:
+        return label.float()
+    if label.ndim == 4 and label.shape[1] == 1:
+        label = label[:, 0]
+    return F.one_hot(label.long(), num_classes=num_classes).permute(0, 3, 1, 2).float()
 
 def eval(args):
     model = get_model(args)
@@ -451,45 +538,189 @@ def eval(args):
     
     model.load_state_dict(torch.load(f'{model_dir}/checkpoint_best.pth'))
     valloader = get_test_dataloader(args)
+    if len(valloader.dataset) == 0:
+        print(
+            f"No images found for test_dataset={args.test_dataset}, test_split={args.test_split}. "
+            "Skipping evaluation."
+        )
+        return
 
-    dice_metric = DiceMetric(include_background=False, reduction="mean")
-    hd95_metric = HausdorffDistanceMetric(include_background=False, reduction="mean", percentile=95)
-    surface_dice_metric = SurfaceDistanceMetric(include_background=False, reduction="mean")
+    region_label_values = None
+    if args.label_mode == 'multilabel':
+        region_label_values = _load_multilabel_regions(args.test_dataset)
+        if len(region_label_values) != args.num_classes:
+            raise ValueError(
+                f"multilabel mode expects num_classes={len(region_label_values)} "
+                f"from dataset.json regions, got {args.num_classes}"
+            )
+
+    include_bg = True if args.label_mode == 'multilabel' else (args.num_classes == 1)
+    dice_metric = DiceMetric(
+        include_background=include_bg,
+        reduction="mean",
+        ignore_empty=False,
+    )
+    hd95_metric = HausdorffDistanceMetric(include_background=include_bg, reduction="mean", percentile=95)
+    surface_dice_metric = SurfaceDistanceMetric(include_background=include_bg, reduction="mean")
     model.eval()
         
     if args.save_preds:
         save_dir = os.path.join(model_dir, 'test', args.test_dataset, 'preds')
         os.makedirs(save_dir, exist_ok=True)
+        if args.overlay:
+            overlay_dir = os.path.join(model_dir, 'test', args.test_dataset, 'overlays')
+            os.makedirs(overlay_dir, exist_ok=True)
+    
+    image_ids = []
+    pred_ext = valloader.dataset.img_ext
+    overlay_written = False
     with torch.no_grad():
         for i_batch, sampled_batch in tqdm(enumerate(valloader), total=len(valloader)):
-            image, label = sampled_batch['image'], sampled_batch['label']
-            image = image.cuda()
-            output = model(image).cpu()
-            output = torch.sigmoid(output)
-            output = (output > 0.5).float()
+            image, label, case = sampled_batch['image'], sampled_batch['label'], sampled_batch['case']
+            is_volume = image.ndim == 5
+            case_id = case[0] if isinstance(case, (list, tuple)) else case
 
-            if args.largest_component:
-                output = output.cpu().numpy()
-                output = find_largest_component_per_class(output, args.num_classes + 1)
-                output = torch.from_numpy(output)
+            if is_volume:
+                image_vol = image[0]
+                d = image_vol.shape[0]
+                logits_chunks = []
+                infer_bs = 8
+                for start in range(0, d, infer_bs):
+                    end = min(start + infer_bs, d)
+                    logits_chunks.append(model(image_vol[start:end].cuda()).cpu())
+                logits = torch.cat(logits_chunks, dim=0)
 
-            dice_metric(output, label)
-            hd95_metric(output, label)
-            surface_dice_metric(output, label)
+                if args.label_mode == 'multilabel':
+                    pred_oh_slices = (torch.sigmoid(logits) > 0.5).float()
+                    gt_oh_slices = prepare_target_for_loss(
+                        label[0].cpu(),
+                        'multilabel',
+                        args.num_classes,
+                        region_label_values=region_label_values,
+                    ).float()
+                else:
+                    pred = logits_to_pred_mask(logits, args.num_classes)
+                    gt = label[0].cpu()
 
-            output = output.numpy()
+                    if args.largest_component:
+                        if args.num_classes == 1:
+                            pred = (pred > 0.5).float()
+                        else:
+                            pred_np = pred.numpy()
+                            pred = torch.from_numpy(find_largest_component_per_class(pred_np, args.num_classes))
+
+                    pred_oh_slices = label_to_one_hot(pred, args.num_classes)
+                    gt_oh_slices = label_to_one_hot(gt, args.num_classes)
+
+                if args.largest_component and args.label_mode == 'multilabel':
+                    pred_np = pred_oh_slices.numpy()
+                    pred_oh_slices = torch.from_numpy(find_largest_component_per_channel(pred_np)).float()
+
+                pred_oh = pred_oh_slices.permute(1, 2, 3, 0).unsqueeze(0)
+                gt_oh = gt_oh_slices.permute(1, 2, 3, 0).unsqueeze(0)
+                image_ids.append(case_id)
+            else:
+                image = image.cuda()
+                logits = model(image).cpu()
+                if args.label_mode == 'multilabel':
+                    pred_oh = (torch.sigmoid(logits) > 0.5).float()
+                    gt_oh = prepare_target_for_loss(
+                        label.cpu(),
+                        'multilabel',
+                        args.num_classes,
+                        region_label_values=region_label_values,
+                    ).float()
+                else:
+                    pred = logits_to_pred_mask(logits, args.num_classes)
+                    gt = label.cpu()
+
+                    if args.largest_component:
+                        if args.num_classes == 1:
+                            pred = (pred > 0.5).float()
+                        else:
+                            pred_np = pred.numpy()
+                            pred = torch.from_numpy(find_largest_component_per_class(pred_np, args.num_classes))
+
+                    pred_oh = label_to_one_hot(pred, args.num_classes)
+                    gt_oh = label_to_one_hot(gt, args.num_classes)
+
+                if args.largest_component and args.label_mode == 'multilabel':
+                    pred_np = pred_oh.numpy()
+                    pred_oh = torch.from_numpy(find_largest_component_per_channel(pred_np)).float()
+
+                image_ids.extend(case)
+
+            dice = dice_metric(pred_oh, gt_oh)
+            hd95 = hd95_metric(pred_oh, gt_oh)
+            masd = surface_dice_metric(pred_oh, gt_oh)
+
+            output = pred_oh.numpy()
+            gt_np = gt_oh.numpy()
             if args.save_preds:
-                for i in range(len(output)):
-                    cv2.imwrite(os.path.join(save_dir, sampled_batch['case'][i] + '.png'),
-                            (output[i][0] * 255).astype('uint8'))
+                if is_volume:
+                    affine = np.eye(4, dtype=np.float32)
+                    if 'affine' in sampled_batch:
+                        affine = sampled_batch['affine'][0].cpu().numpy().astype(np.float32)
+                    output_vol = output[0]
+                    if args.label_mode == 'multilabel':
+                        for c in range(args.num_classes):
+                            pred_filename = os.path.join(save_dir, f"{case_id}_c{c}{pred_ext}")
+                            nib.save(nib.Nifti1Image(output_vol[c].astype(np.uint8), affine), pred_filename)
+                    else:
+                        if args.num_classes == 1:
+                            label_vol = output_vol[0]
+                        else:
+                            label_vol = np.argmax(output_vol, axis=0)
+                        pred_filename = os.path.join(save_dir, f"{case_id}{pred_ext}")
+                        nib.save(nib.Nifti1Image(label_vol.astype(np.uint8), affine), pred_filename)
+                else:
+                    for i in range(len(output)):
+                        for c in range(args.num_classes):
+                            if args.overlay:
+                                overlay_written = True
+                                save_path = os.path.join(overlay_dir, case[i] + '.png')
+                                visualize_prediction(
+                                    img=image[i, 0, :, :].cpu().numpy(),
+                                    gt=gt_np[i, c],
+                                    pred=output[i, c],
+                                    dice=dice[i].item(),
+                                    masd=masd[i].item(),
+                                    hd95=hd95[i].item(),
+                                    save_path=save_path
+                                )
+                            else:
+                                if args.num_classes > 1:
+                                    pred_filename = os.path.join(save_dir, f"{case[i]}_c{c}{pred_ext}")
+                                else:
+                                    pred_filename = os.path.join(save_dir, f"{case[i]}{pred_ext}")
+                                cv2.imwrite(pred_filename, (output[i, c] * 255).astype('uint8'))
 
-        # Calculate metrics
-        dice_score = dice_metric.aggregate().item() * 100
-        dice_std = dice_metric.get_buffer().std().item() * 100
-        hd95_score = hd95_metric.aggregate().item()
-        hd95_std = hd95_metric.get_buffer().std().item()
-        masd_score = surface_dice_metric.aggregate().item()
-        masd_std = surface_dice_metric.get_buffer().std().item()
+        if args.save_preds and args.overlay and overlay_written:
+            print("Overlay mode is enabled. Metrics will not be calculated.")
+            return
+
+        # Calculate metrics with finite-only reduction to avoid NaN/Inf in reports.
+        dice_raw = dice_metric.get_buffer()
+        hd95_raw = hd95_metric.get_buffer()
+        masd_raw = surface_dice_metric.get_buffer()
+        if dice_raw is None or hd95_raw is None or masd_raw is None:
+            print("No valid metric buffers were produced. Skipping metric export.")
+            return
+        dice_buffer = dice_raw.detach().float() * 100
+        hd95_buffer = hd95_raw.detach().float()
+        masd_buffer = masd_raw.detach().float()
+
+        def _finite_mean_std(buffer):
+            x = buffer.reshape(-1)
+            finite = torch.isfinite(x)
+            if finite.any():
+                v = x[finite]
+                return v.mean().item(), v.std(unbiased=False).item()
+            return 0.0, 0.0
+
+        dice_score, dice_std = _finite_mean_std(dice_buffer)
+        hd95_score, hd95_std = _finite_mean_std(hd95_buffer)
+        masd_score, masd_std = _finite_mean_std(masd_buffer)
 
         # Print metrics
         print("\n")
@@ -521,6 +752,47 @@ def eval(args):
             })
         
         print(f"Results saved to: {results_csv_path}\n")
+
+        # Save image-wise metrics to CSV (extract from metric buffers)
+        if args.test_dataset == args.train_dataset_name:
+            image_wise_csv_path = os.path.join(os.path.dirname(model_dir), f'image_wise_results{"_largest_component" if args.largest_component else ""}_{args.test_dataset}.csv')
+        else:
+            image_wise_csv_path = os.path.join(model_dir, 'test', f'image_wise_results{"_largest_component" if args.largest_component else ""}_{args.test_dataset}.csv')
+        
+        os.makedirs(os.path.dirname(image_wise_csv_path), exist_ok=True)
+        
+        # Per-image metrics from MONAI buffers
+
+        def _buffer_row_to_scalar(buffer, idx):
+            row = buffer[idx]
+            if isinstance(row, torch.Tensor):
+                row = row.detach().float().reshape(-1)
+                # For multi-class metrics, store the mean across classes per image.
+                finite = torch.isfinite(row)
+                if finite.any():
+                    return row[finite].mean().item()
+                return 0.0
+            return float(row)
+        
+        csv_exists = os.path.exists(image_wise_csv_path) and os.path.getsize(image_wise_csv_path) > 0
+        with open(image_wise_csv_path, 'a', newline='') as csvfile:
+            fieldnames = ['image_id', 'dice', 'hd95', 'masd']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            
+            # Write header only if file doesn't exist or is empty
+            if not csv_exists:
+                writer.writeheader()
+            
+            # Write image-wise results
+            for i, image_id in enumerate(image_ids):
+                writer.writerow({
+                    'image_id': image_id,
+                    'dice': f"{_buffer_row_to_scalar(dice_buffer, i):.2f}",
+                    'hd95': f"{_buffer_row_to_scalar(hd95_buffer, i):.2f}",
+                    'masd': f"{_buffer_row_to_scalar(masd_buffer, i):.2f}"
+                })
+        
+        print(f"Image-wise results saved to: {image_wise_csv_path}\n")
 
 
 if __name__ == "__main__":

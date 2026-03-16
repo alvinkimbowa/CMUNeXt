@@ -68,6 +68,7 @@ class CMUNeXt_nnUNetDataset(Dataset):
         split_type='train',
         transform=None,
         eval=False,
+        return_full_volume=False,
         oversample_foreground_percent=0.33,
     ):
         self.transform = transform
@@ -75,6 +76,7 @@ class CMUNeXt_nnUNetDataset(Dataset):
         self.num_classes = num_classes
         self.eval = eval
         self.split_type = split_type
+        self.return_full_volume = return_full_volume
         self.oversample_foreground_percent = oversample_foreground_percent
         
         nnunet_raw = os.environ['nnUNet_raw']
@@ -127,7 +129,8 @@ class CMUNeXt_nnUNetDataset(Dataset):
         other_chs = sorted(other_chs)
 
         if self.img_ext in ['.nii.gz', '.nii']:
-            imgs = [nib.load(img_filename).get_fdata()]
+            ref_img_nii = nib.load(img_filename)
+            imgs = [ref_img_nii.get_fdata()]
             for ch in other_chs:
                 imgs.append(nib.load(ch).get_fdata())
 
@@ -136,6 +139,55 @@ class CMUNeXt_nnUNetDataset(Dataset):
                 seg_vol = nib.load(label_filename).get_fdata()
             elif not self.eval:
                 raise ValueError(f"Label file not found: {label_filename}")
+
+            if self.return_full_volume:
+                d = imgs[0].shape[2]
+                img_slices = []
+                mask_slices = []
+
+                for z_idx in range(d):
+                    stacked = []
+                    for vol in imgs:
+                        if vol.ndim == 3:
+                            sl = vol[:, :, z_idx]
+                        else:
+                            sl = vol
+                        stacked.append(sl[..., None].astype('float32'))
+                    img = np.concatenate(stacked, axis=-1)
+                    if self.input_channels == 3 and img.shape[-1] == 1:
+                        img = np.repeat(img, 3, axis=-1)
+
+                    if seg_vol is not None:
+                        mask = seg_vol[:, :, z_idx]
+                        if self.num_classes == 1:
+                            mask = mask[..., None]
+                    else:
+                        if self.num_classes == 1:
+                            mask = np.zeros(img.shape[:2])[..., None]
+                        else:
+                            mask = np.zeros(img.shape[:2], dtype='int64')
+
+                    if self.transform is not None:
+                        augmented = self.transform(image=img, mask=mask)
+                        img = augmented['image']
+                        mask = augmented['mask']
+
+                    img = img.astype('float32').transpose(2, 0, 1)
+                    if self.num_classes == 1:
+                        mask = mask.astype('float32').transpose(2, 0, 1)
+                    else:
+                        mask = mask.astype('int64')
+
+                    img_slices.append(img)
+                    mask_slices.append(mask)
+
+                sample = {
+                    "image": np.stack(img_slices, axis=0),
+                    "label": np.stack(mask_slices, axis=0),
+                    "case": img_id,
+                    "affine": ref_img_nii.affine.astype(np.float32),
+                }
+                return sample
 
             force_fg = None
             if self.eval or self.split_type != 'train':
@@ -174,18 +226,13 @@ class CMUNeXt_nnUNetDataset(Dataset):
                 mask = seg_slice
             else:
                 mask = cv2.imread(label_filename, cv2.IMREAD_GRAYSCALE)
-            if self.num_classes > 1:
-                masks = []
-                for i in range(self.num_classes):
-                    masks.append((mask == (i + 1)).astype('float32')[..., None])
-                mask = np.dstack(masks)
-            else:
+            if self.num_classes == 1:
                 mask = mask[..., None]
         elif self.eval:
-            if self.num_classes > 1:
-                mask = np.zeros((img.shape[0], img.shape[1], self.num_classes), dtype='float32')
-            else:
+            if self.num_classes == 1:
                 mask = np.zeros(img.shape[:2])[..., None]
+            else:
+                mask = np.zeros(img.shape[:2], dtype='int64')
         else:
             raise ValueError(f"Label file not found: {label_filename}")
         
@@ -196,8 +243,12 @@ class CMUNeXt_nnUNetDataset(Dataset):
 
         img = img.astype('float32')
         img = img.transpose(2, 0, 1)
-        mask = mask.astype('float32')
-        mask = mask.transpose(2, 0, 1)
+        if self.num_classes == 1:
+            mask = mask.astype('float32')
+            mask = mask.transpose(2, 0, 1)
+        else:
+            # Multi-class labels are class indices [0, C-1].
+            mask = mask.astype('int64')
         
         sample = {"image": img, "label": mask, "case": img_id}
         return sample
