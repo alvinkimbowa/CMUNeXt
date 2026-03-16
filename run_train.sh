@@ -1,25 +1,43 @@
 #!/bin/bash
 
-nnUNet_raw="nnUNet_raw"
-nnUNet_preprocessed="nnUNet_preprocessed"
+source /home/ultrai/UltrAi/UNeXt/.venv/bin/activate
+
+nnUNet_raw="/home/ultrai/UltrAi/nntinyunet/data/nnUNet_raw"
+nnUNet_preprocessed="/home/ultrai/UltrAi/nntinyunet/data/nnUNet_preprocessed"
 
 export nnUNet_raw=$nnUNet_raw
 export nnUNet_preprocessed=$nnUNet_preprocessed
 
 train=0
-eval=0
+eval=1
 analyze=0
 ckpt="checkpoint_best.pth"
 train_dataset_name="Dataset072_GE_LQP9"
+# train_dataset_name="Dataset073_GE_LE"
+# train_dataset_name="Dataset070_Clarius_L15"
+
+# train_dataset_name="Dataset301_busbra"
+# train_dataset_name="Dataset300_isic2018"
+# train_dataset_name="Dataset302_EchoNet-Dynamic"
+# train_dataset_name="Dataset309_FIVES"
+# train_dataset_name="Dataset306_ACDC"
+# train_dataset_name="Dataset137_BraTS2021"
+
 model="CMUNeXt-S"
 fold=0
 data_augmentation=false
 label_mode="multiclass"
 num_classes=1
 # Evaluation settings
-test_datasets=("Dataset072_GE_LQP9" "Dataset073_GE_LE" "Dataset070_Clarius_L15" "Dataset078_KneeUS_OtherDevices")
-save_preds=false
-largest_component=true
+# test_datasets=("Dataset072_GE_LQP9" "Dataset073_GE_LE" "Dataset070_Clarius_L15" "Dataset078_KneeUS_OtherDevices" "Dataset079_KneeUS_Ilker")
+# test_datasets=("Dataset070_Clarius_L15" "Dataset079_KneeUS_Ilker")
+# test_datasets=("Dataset073_GE_LE")
+# test_datasets=("Dataset079_KneeUS_Ilker")
+test_datasets=($train_dataset_name)
+
+save_preds=true
+overlay=false
+largest_component=false
 # Analysis defaults
 input_channels=3
 gpu=0
@@ -72,6 +90,12 @@ fi
 for fold in {0..0}; do
     if [[ $eval -eq 1 ]]; then
         for test_dataset in ${test_datasets[@]}; do
+            # echo "Evaluating $test_dataset"
+            # if [[ $test_dataset == "Dataset078_KneeUS_OtherDevices" || $test_dataset == "Dataset079_KneeUS_Ilker" ]]; then
+            #     test_split="Ts"
+            # else
+            #     test_split="Tr"
+            # fi
             test_split="Ts"
             python main.py \
                 --model $model \
