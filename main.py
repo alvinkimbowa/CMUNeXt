@@ -63,6 +63,7 @@ parser.add_argument('--base_lr', type=float, default=0.01,
 parser.add_argument('--batch_size', type=int, default=8,
                     help='batch_size per gpu')
 parser.add_argument('--eval', type=int, default=0, help='eval')
+parser.add_argument('--ckpt', type=str, default="checkpoint_best.pth", help='checkpoint')
 parser.add_argument('--test_dataset', type=str, default="Dataset073_GE_LE", help='test dataset name')
 parser.add_argument('--test_split', type=str, default="Tr", help='test split')
 parser.add_argument('--save_preds', type=str2bool, default=False, help='save preds')
@@ -279,7 +280,37 @@ def train(args):
     iter_num = 0
     max_epoch = 300
     max_iterations = len(trainloader) * max_epoch
-    for epoch_num in range(max_epoch):
+    fold_str = str(args.fold)
+    if args.data_augmentation:
+        model_dir = f"models/{args.model}DA/{args.train_dataset_name}/fold_{fold_str}"
+    else:
+        model_dir = f"models/{args.model}/{args.train_dataset_name}/fold_{fold_str}"
+    os.makedirs(model_dir, exist_ok=True)
+    last_ckpt_path = f"{model_dir}/checkpoint_last.pth"
+
+    log = {
+        'epoch': [],
+        'loss': [],
+        'val_loss': [],
+        'dice': [],
+        'val_dice': [],
+    }
+    start_epoch = 0
+    if os.path.exists(last_ckpt_path):
+        ckpt = torch.load(last_ckpt_path, map_location='cpu')
+        model.load_state_dict(ckpt['model_state_dict'])
+        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        start_epoch = int(ckpt.get('epoch', -1)) + 1
+        best_iou = float(ckpt.get('best_iou', 0.0))
+        iter_num = int(ckpt.get('iter_num', start_epoch * len(trainloader)))
+        ckpt_log = ckpt.get('log', None)
+        if isinstance(ckpt_log, dict):
+            for k in log.keys():
+                if k in ckpt_log and isinstance(ckpt_log[k], list):
+                    log[k] = ckpt_log[k]
+        print(f"Resuming training from {last_ckpt_path} at epoch {start_epoch}")
+
+    for epoch_num in range(start_epoch, max_epoch):
         model.train()
         avg_meters = {'loss': AverageMeter(),
                       'iou': AverageMeter(),
@@ -381,6 +412,18 @@ def train(args):
             torch.save(model.state_dict(), f'{model_dir}/checkpoint_best.pth')
             best_iou = avg_meters['val_iou'].avg
             print("=> saved best model")
+
+        torch.save(
+            {
+                'epoch': epoch_num,
+                'iter_num': iter_num,
+                'best_iou': best_iou,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'log': log,
+            },
+            last_ckpt_path
+        )
     
     torch.save(model.state_dict(), f'{model_dir}/checkpoint_final.pth')
     print("=> saved final model")
