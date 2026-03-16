@@ -323,7 +323,7 @@ def train(args):
                       'F1': AverageMeter(),
                       'ACC': AverageMeter()
                       }
-        for i_batch, sampled_batch in enumerate(trainloader):
+        for i_batch, sampled_batch in tqdm(enumerate(trainloader), total=len(trainloader)):
 
             volume_batch, label_batch = sampled_batch['image'], sampled_batch['label']
             volume_batch, label_batch = volume_batch.cuda(), label_batch.cuda()
@@ -360,7 +360,7 @@ def train(args):
 
         model.eval()
         with torch.no_grad():
-            for i_batch, sampled_batch in enumerate(valloader):
+            for i_batch, sampled_batch in tqdm(enumerate(valloader), total=len(valloader)):
                 input, target = sampled_batch['image'], sampled_batch['label']
                 input = input.cuda()
                 target = target.cuda()
