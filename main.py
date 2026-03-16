@@ -27,7 +27,7 @@ from utils.metrics import iou_score, prepare_target_for_loss
 from network.CMUNeXt import cmunext, cmunext_s, cmunext_l
 from tqdm import tqdm
 
-
+import matplotlib.pyplot as plt
 
 def seed_torch(seed):
     np.random.seed(seed)
@@ -71,6 +71,7 @@ parser.add_argument('--largest_component', type=str2bool, default=False, help='l
 parser.add_argument('--num_classes', type=int, default=1, help='number of classes')
 parser.add_argument('--input_channels', type=int, default=3, help='number of input image channels')
 parser.add_argument('--label_mode', type=str, default='multiclass', choices=['multiclass', 'multilabel'], help='label mode')
+parser.add_argument('--plot_curves', type=str2bool, default=True, help='plot train/val loss and dice curves')
 args = parser.parse_args()
 
 
@@ -134,6 +135,35 @@ def _to_finite_scalar(x, default=0.0):
     if np.isnan(x) or np.isinf(x):
         return float(default)
     return x
+
+
+def plot_training_curves(log_data, output_path):
+    fig, ax1 = plt.subplots(figsize=(10, 6))
+
+    epochs = log_data['epoch']
+    ax1.set_xlabel('Epoch')
+    ax1.set_ylabel('Loss', color='tab:blue')
+    line1 = ax1.plot(epochs, log_data['loss'], 'b-', label='Train Loss', alpha=0.7)
+    line2 = ax1.plot(epochs, log_data['val_loss'], 'b--', label='Val Loss', alpha=0.7)
+    ax1.tick_params(axis='y', labelcolor='tab:blue')
+    ax1.grid(True, axis='x', alpha=0.3)
+
+    ax2 = ax1.twinx()
+    ax2.set_ylabel('Dice', color='tab:red')
+    line3 = ax2.plot(epochs, log_data['dice'], 'r-', label='Train Dice', alpha=0.7)
+    line4 = ax2.plot(epochs, log_data['val_dice'], 'r--', label='Val Dice', alpha=0.7)
+    ax2.tick_params(axis='y', labelcolor='tab:red')
+    ax2.grid(True, axis='y', alpha=0.3)
+
+    lines = line1 + line2 + line3 + line4
+    labels = [l.get_label() for l in lines]
+    ax1.legend(lines, labels, loc='upper left', bbox_to_anchor=(0, 1.12), ncols=2, frameon=False)
+
+    plt.title('Training Curves')
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
 
 def getDataloader(args):
     img_size = 256
@@ -253,8 +283,10 @@ def train(args):
         model.train()
         avg_meters = {'loss': AverageMeter(),
                       'iou': AverageMeter(),
+                      'dice': AverageMeter(),
                       'val_loss': AverageMeter(),
                       'val_iou': AverageMeter(),
+                      'val_dice': AverageMeter(),
                       'SE': AverageMeter(),
                       'PC': AverageMeter(),
                       'F1': AverageMeter(),
@@ -293,6 +325,7 @@ def train(args):
             iter_num = iter_num + 1
             avg_meters['loss'].update(loss.item(), volume_batch.size(0))
             avg_meters['iou'].update(iou, volume_batch.size(0))
+            avg_meters['dice'].update(dice, volume_batch.size(0))
 
         model.eval()
         with torch.no_grad():
@@ -323,24 +356,26 @@ def train(args):
                 ACC = _to_finite_scalar(ACC)
                 avg_meters['val_loss'].update(loss.item(), input.size(0))
                 avg_meters['val_iou'].update(iou, input.size(0))
+                avg_meters['val_dice'].update(dice, input.size(0))
                 avg_meters['SE'].update(SE, input.size(0))
                 avg_meters['PC'].update(PC, input.size(0))
                 avg_meters['F1'].update(F1, input.size(0))
                 avg_meters['ACC'].update(ACC, input.size(0))
 
         print(
-            'epoch [%d/%d]  train_loss : %.4f, train_iou: %.4f '
-            '- val_loss %.4f - val_iou %.4f - val_SE %.4f - val_PC %.4f - val_F1 %.4f - val_ACC %.4f'
-            % (epoch_num, max_epoch, avg_meters['loss'].avg, avg_meters['iou'].avg,
-               avg_meters['val_loss'].avg, avg_meters['val_iou'].avg, avg_meters['SE'].avg,
+            'epoch [%d/%d]  train_loss : %.4f, train_iou: %.4f, train_dice: %.4f '
+            '- val_loss %.4f - val_iou %.4f - val_dice %.4f - val_SE %.4f - val_PC %.4f - val_F1 %.4f - val_ACC %.4f'
+            % (epoch_num, max_epoch, avg_meters['loss'].avg, avg_meters['iou'].avg, avg_meters['dice'].avg,
+               avg_meters['val_loss'].avg, avg_meters['val_iou'].avg, avg_meters['val_dice'].avg, avg_meters['SE'].avg,
                avg_meters['PC'].avg, avg_meters['F1'].avg, avg_meters['ACC'].avg))
         
-        fold_str = str(args.fold)
-        if args.data_augmentation:
-            model_dir = f"models/{args.model}DA/{args.train_dataset_name}/fold_{fold_str}"
-        else:
-            model_dir = f"models/{args.model}/{args.train_dataset_name}/fold_{fold_str}"
-        os.makedirs(model_dir, exist_ok=True)
+        log['epoch'].append(epoch_num)
+        log['loss'].append(avg_meters['loss'].avg)
+        log['val_loss'].append(avg_meters['val_loss'].avg)
+        log['dice'].append(avg_meters['dice'].avg)
+        log['val_dice'].append(avg_meters['val_dice'].avg)
+        if args.plot_curves:
+            plot_training_curves(log, f'{model_dir}/loss_curves.png')
 
         if avg_meters['val_iou'].avg > best_iou:
             torch.save(model.state_dict(), f'{model_dir}/checkpoint_best.pth')
