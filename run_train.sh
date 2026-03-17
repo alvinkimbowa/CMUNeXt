@@ -2,14 +2,14 @@
 
 source /home/ultrai/UltrAi/UNeXt/.venv/bin/activate
 
-nnUNet_raw="nnUNet_raw"
-nnUNet_preprocessed="nnUNet_preprocessed"
+nnUNet_raw="/home/ultrai/UltrAi/knee_us_segmentation/data/nnUNet_raw"
+nnUNet_preprocessed="/home/ultrai/UltrAi/knee_us_segmentation/data/nnUNet_preprocessed"
 
 export nnUNet_raw=$nnUNet_raw
 export nnUNet_preprocessed=$nnUNet_preprocessed
 
 train=0
-eval=0
+eval=1
 analyze=0
 train_dataset_name="Dataset072_GE_LQP9"
 # train_dataset_name="Dataset073_GE_LE"
