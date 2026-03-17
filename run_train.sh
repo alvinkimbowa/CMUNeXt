@@ -1,5 +1,7 @@
 #!/bin/bash
 
+source /home/ultrai/UltrAi/UNeXt/.venv/bin/activate
+
 nnUNet_raw="nnUNet_raw"
 nnUNet_preprocessed="nnUNet_preprocessed"
 
@@ -10,6 +12,8 @@ train=0
 eval=0
 analyze=0
 train_dataset_name="Dataset072_GE_LQP9"
+# train_dataset_name="Dataset073_GE_LE"
+# train_dataset_name="Dataset070_Clarius_L15"
 model="CMUNeXt-S"
 fold=4
 data_augmentation=true
