@@ -41,10 +41,7 @@ def analyze_model(arch, input_channels=1, num_classes=2, input_h=256, input_w=25
     """Analyze model parameters and FLOPs"""
     
     # Set device
-    if gpu < 0:
-        device = torch.device('cpu')
-    else:
-        device = torch.device(f'cuda:{gpu}' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda')
     
     print(f"\n{'='*60}")
     print(f"MODEL ANALYSIS")
