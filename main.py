@@ -29,6 +29,24 @@ from tqdm import tqdm
 
 import matplotlib.pyplot as plt
 
+
+def save_training_log_csv(log, path):
+    """Write the completed epoch history to a human-readable CSV file."""
+    fieldnames = ['epoch', 'train_loss', 'val_loss', 'train_dice', 'val_dice']
+    with open(path, 'w', newline='') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        for epoch, train_loss, val_loss, train_dice, val_dice in zip(
+            log['epoch'], log['loss'], log['val_loss'], log['dice'], log['val_dice']
+        ):
+            writer.writerow({
+                'epoch': epoch,
+                'train_loss': f'{train_loss:.6f}',
+                'val_loss': f'{val_loss:.6f}',
+                'train_dice': f'{train_dice:.6f}',
+                'val_dice': f'{val_dice:.6f}',
+            })
+
 def seed_torch(seed):
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -342,6 +360,7 @@ def train(args):
         model_dir = f"models/{args.model}/{args.train_dataset_name}/fold_{fold_str}"
     os.makedirs(model_dir, exist_ok=True)
     last_ckpt_path = f"{model_dir}/checkpoint_last.pth"
+    training_log_path = f"{model_dir}/training_log.csv"
 
     log = {
         'epoch': [],
@@ -363,6 +382,7 @@ def train(args):
             for k in log.keys():
                 if k in ckpt_log and isinstance(ckpt_log[k], list):
                     log[k] = ckpt_log[k]
+            save_training_log_csv(log, training_log_path)
         print(f"Resuming training from {last_ckpt_path} at epoch {start_epoch}")
 
     for epoch_num in range(start_epoch, max_epoch):
@@ -479,6 +499,7 @@ def train(args):
             },
             last_ckpt_path
         )
+        save_training_log_csv(log, training_log_path)
     
     torch.save(model.state_dict(), f'{model_dir}/checkpoint_final.pth')
     print("=> saved final model")
