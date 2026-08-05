@@ -13,6 +13,18 @@ def _class_index_to_regions(target_lbl, region_label_values):
 
 def prepare_target_for_loss(target, label_mode, num_classes, region_label_values=None):
     if label_mode == 'multiclass':
+        # A single output channel is binary segmentation and uses BCE/Dice,
+        # which requires a floating target with the same [B, 1, H, W] shape.
+        if num_classes == 1:
+            if target.ndim == 3:
+                target = target.unsqueeze(1)
+            if target.ndim != 4 or target.shape[1] != 1:
+                raise ValueError(
+                    f"Binary segmentation expects target with shape [B,H,W] or "
+                    f"[B,1,H,W], got {tuple(target.shape)}"
+                )
+            return target.float()
+
         if target.ndim == 4 and target.shape[1] == num_classes:
             target = torch.argmax(target, dim=1)
         elif target.ndim == 4 and target.shape[1] == 1:
