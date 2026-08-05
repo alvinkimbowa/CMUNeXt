@@ -2,14 +2,14 @@
 
 source ../UNeXt/.venv/bin/activate
 
-nnUNet_raw="../mononunetv2/data/nnUNet_raw"
-nnUNet_preprocessed="../mononunetv2/data/nnUNet_preprocessed"
+nnUNet_raw="../monounetv2/data/nnUNet_raw"
+nnUNet_preprocessed="../monounetv2/data/nnUNet_raw"
 
 export nnUNet_raw=$nnUNet_raw
 export nnUNet_preprocessed=$nnUNet_preprocessed
 
 train=1
-eval=1
+eval=0
 analyze=0
 # train_dataset_name="Dataset072_GE_LQP9"
 # train_dataset_name="Dataset073_GE_LE"
