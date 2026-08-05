@@ -1,27 +1,44 @@
 #!/bin/bash
 
-nnUNet_raw="nnUNet_raw"
-nnUNet_preprocessed="nnUNet_preprocessed"
+source ../UNeXt/.venv/bin/activate
+
+nnUNet_raw="../mononunetv2/data/nnUNet_raw"
+nnUNet_preprocessed="../mononunetv2/data/nnUNet_preprocessed"
 
 export nnUNet_raw=$nnUNet_raw
 export nnUNet_preprocessed=$nnUNet_preprocessed
 
-train=0
-eval=0
+train=1
+eval=1
 analyze=0
-train_dataset_name="Dataset072_GE_LQP9"
+# train_dataset_name="Dataset072_GE_LQP9"
+# train_dataset_name="Dataset073_GE_LE"
+# train_dataset_name="Dataset070_Clarius_L15"
+train_dataset_name="Dataset080_BUSBRA_GE_Logiq_5"
+# train_dataset_name="Dataset081_BUSBRA_GE_Logiq_7"
+# train_dataset_name="Dataset082_BUSBRA_Toshiba_Aplio_300"
+# train_dataset_name="Dataset083_BUSBRA_U_Systems"
+# train_dataset_name="Dataset084_KidneyUS_Philips"
+# train_dataset_name="Dataset085_KidneyUS_Other_Devices"
+# train_dataset_name="Dataset086_MMOTU_2D"
+# train_dataset_name="Dataset087_MMOTU_CEUS"
 model="CMUNeXt-S"
-fold=4
-data_augmentation=true
+data_augmentation=false
 num_classes=1
 # Evaluation settings
-test_datasets=("Dataset072_GE_LQP9" "Dataset073_GE_LE" "Dataset070_Clarius_L15" "Dataset078_KneeUS_OtherDevices")
-save_preds=false
+# test_datasets=("Dataset072_GE_LQP9" "Dataset073_GE_LE" "Dataset070_Clarius_L15") # "Dataset079_KneeUS_Ilker")
+test_datasets=("Dataset080_BUSBRA_GE_Logiq_5" "Dataset081_BUSBRA_GE_Logiq_7" "Dataset082_BUSBRA_Toshiba_Aplio_300" "Dataset083_BUSBRA_U_Systems")
+# test_datasets=("Dataset084_KidneyUS_Philips" "Dataset085_KidneyUS_Other_Devices")
+# test_datasets=("Dataset086_MMOTU_2D" "Dataset087_MMOTU_CEUS")
+save_preds=true
 largest_component=true
 # Analysis defaults
 input_channels=3
-gpu=0
+gpu=1
 
+export CUDA_VISIBLE_DEVICES=$gpu
+
+for fold in {0..0}; do
 echo "nnUNet_raw: $nnUNet_raw"
 echo "nnUNet_preprocessed: $nnUNet_preprocessed"
 echo "train: $train"
@@ -54,7 +71,7 @@ fi
 if [[ $eval -eq 1 ]]; then
     for test_dataset in ${test_datasets[@]}; do
         echo "Evaluating $test_dataset"
-        if [[ $test_dataset == "Dataset078_KneeUS_OtherDevices" ]]; then
+        if [[ $test_dataset == "Dataset078_KneeUS_OtherDevices" || $test_dataset == "Dataset079_KneeUS_Ilker" ]]; then
             test_split="Ts"
         else
             test_split="Tr"
@@ -73,7 +90,7 @@ if [[ $eval -eq 1 ]]; then
                 --input_channels $input_channels
     done
 fi
-
+done
 
 if [[ $analyze -eq 1 ]]; then
     current_arch=$model
@@ -89,7 +106,7 @@ if [[ $analyze -eq 1 ]]; then
         model_dir="${model_dir}DA"
     fi
     if [[ -d "$model_dir" ]]; then
-        analyze_args="$analyze_args --save_path $model_dir/model_analysis.json"
+        analyze_args="$analyze_args --save_path $model_dir/$train_dataset_name/model_analysis.json"
     fi
     
     python analyze_model.py $analyze_args
