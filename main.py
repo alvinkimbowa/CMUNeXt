@@ -16,7 +16,6 @@ from albumentations.core.composition import Compose
 from albumentations import RandomRotate90, Resize, Flip
 from albumentations.augmentations.geometric.transforms import Affine
 
-from monai.metrics import DiceMetric, HausdorffDistanceMetric, SurfaceDistanceMetric
 from scipy.ndimage import label
 import torch.nn.functional as F
 
@@ -560,6 +559,7 @@ def label_to_one_hot(label, num_classes):
     return F.one_hot(label.long(), num_classes=num_classes).permute(0, 3, 1, 2).float()
 
 def eval(args):
+    """Write predictions to disk. Scoring is compute_metrics.py's job - see run_train.sh."""
     model = get_model(args)
     if args.data_augmentation:
         model_dir = f"models/{args.model}DA/{args.train_dataset_name}/fold_{args.fold}"
@@ -584,17 +584,6 @@ def eval(args):
                 f"from dataset.json regions, got {args.num_classes}"
             )
 
-    include_bg = True if args.label_mode == 'multilabel' else (args.num_classes == 1)
-    # MONAI's default ignore_empty=True is what the sibling monounetv2 val.py uses: an
-    # empty prediction against a real target still scores Dice 0 and counts, while a class
-    # absent from both is undefined rather than a perfect 1.0.
-    dice_metric = DiceMetric(
-        include_background=include_bg,
-        reduction="mean",
-        ignore_empty=True,
-    )
-    hd95_metric = HausdorffDistanceMetric(include_background=include_bg, reduction="mean", percentile=95)
-    surface_dice_metric = SurfaceDistanceMetric(include_background=include_bg, reduction="mean")
     model.eval()
         
     if args.save_preds:
@@ -606,7 +595,6 @@ def eval(args):
     
     image_ids = []
     pred_ext = valloader.dataset.img_ext
-    overlay_written = False
     with torch.no_grad():
         for i_batch, sampled_batch in tqdm(enumerate(valloader), total=len(valloader)):
             image, label, case = sampled_batch['image'], sampled_batch['label'], sampled_batch['case']
@@ -683,10 +671,6 @@ def eval(args):
 
                 image_ids.extend(case)
 
-            dice = dice_metric(pred_oh, gt_oh)
-            hd95 = hd95_metric(pred_oh, gt_oh)
-            masd = surface_dice_metric(pred_oh, gt_oh)
-
             output = pred_oh.numpy()
             gt_np = gt_oh.numpy()
             if args.save_preds:
@@ -708,128 +692,49 @@ def eval(args):
                         nib.save(nib.Nifti1Image(label_vol.astype(np.uint8), affine), pred_filename)
                 else:
                     for i in range(len(output)):
-                        for c in range(args.num_classes):
-                            if args.overlay:
-                                overlay_written = True
+                        if args.overlay:
+                            for c in range(args.num_classes):
                                 save_path = os.path.join(overlay_dir, case[i] + '.png')
+                                # The metric annotations are gone with the scoring; the
+                                # numbers live in compute_metrics.py's per-image CSV.
                                 visualize_prediction(
                                     img=image[i, 0, :, :].cpu().numpy(),
                                     gt=gt_np[i, c],
                                     pred=output[i, c],
-                                    dice=dice[i].item(),
-                                    masd=masd[i].item(),
-                                    hd95=hd95[i].item(),
                                     save_path=save_path
                                 )
-                            else:
-                                if args.num_classes > 1:
-                                    pred_filename = os.path.join(save_dir, f"{case[i]}_c{c}{pred_ext}")
-                                else:
-                                    pred_filename = os.path.join(save_dir, f"{case[i]}{pred_ext}")
+                            continue
+
+                        if args.label_mode == 'multilabel':
+                            # Regions overlap, so they cannot collapse into one label map.
+                            for c in range(args.num_classes):
+                                pred_filename = os.path.join(save_dir, f"{case[i]}_c{c}{pred_ext}")
                                 cv2.imwrite(pred_filename, (output[i, c] * 255).astype('uint8'))
+                            continue
 
-        if args.save_preds and args.overlay and overlay_written:
-            print("Overlay mode is enabled. Metrics will not be calculated.")
-            return
+                        # One label map per image at the resolution of the nnUNet_raw
+                        # label, matching what nnU-Net, xtinyunet and monounetv2 write.
+                        # The forward transform is a plain anisotropic Resize to 256x256
+                        # with no pad or crop, so nearest-neighbour inverts it exactly.
+                        if args.num_classes == 1:
+                            pred_lbl = output[i, 0]
+                        else:
+                            pred_lbl = np.argmax(output[i], axis=0)
+                        pred_lbl = pred_lbl.astype('uint8')
 
-        # Calculate metrics with finite-only reduction to avoid NaN/Inf in reports.
-        dice_raw = dice_metric.get_buffer()
-        hd95_raw = hd95_metric.get_buffer()
-        masd_raw = surface_dice_metric.get_buffer()
-        if dice_raw is None or hd95_raw is None or masd_raw is None:
-            print("No valid metric buffers were produced. Skipping metric export.")
-            return
-        dice_buffer = dice_raw.detach().float() * 100
-        hd95_buffer = hd95_raw.detach().float()
-        masd_buffer = masd_raw.detach().float()
+                        gt_path = os.path.join(valloader.dataset.label_dir, case[i] + pred_ext)
+                        gt_orig = cv2.imread(gt_path, cv2.IMREAD_GRAYSCALE)
+                        if gt_orig is None:
+                            raise FileNotFoundError(f"original label not found: {gt_path}")
+                        if pred_lbl.shape != gt_orig.shape:
+                            pred_lbl = cv2.resize(
+                                pred_lbl,
+                                (gt_orig.shape[1], gt_orig.shape[0]),
+                                interpolation=cv2.INTER_NEAREST,
+                            )
 
-        def _finite_mean_std(buffer):
-            x = buffer.reshape(-1)
-            finite = torch.isfinite(x)
-            if finite.any():
-                v = x[finite]
-                return v.mean().item(), v.std(unbiased=False).item()
-            return 0.0, 0.0
+                        cv2.imwrite(os.path.join(save_dir, case[i] + pred_ext), pred_lbl)
 
-        dice_score, dice_std = _finite_mean_std(dice_buffer)
-        hd95_score, hd95_std = _finite_mean_std(hd95_buffer)
-        masd_score, masd_std = _finite_mean_std(masd_buffer)
-
-        # Print metrics
-        print("\n")
-        print(f"Dice: {dice_score:.2f}% ± {dice_std:.2f}%")
-        print(f"HD95: {hd95_score:.2f} ± {hd95_std:.2f}")
-        print(f"MASD: {masd_score:.2f} ± {masd_std:.2f}")
-
-        # Save to CSV
-        results_csv_path = f"{model_dir}/test/results{'_largest_component' if args.largest_component else ''}.csv"
-        os.makedirs(os.path.dirname(results_csv_path), exist_ok=True)
-        csv_exists = os.path.exists(results_csv_path)
-        with open(results_csv_path, 'a', newline='') as csvfile:
-            fieldnames = ['test_dataset_name', 'dice', 'dice_std', 'hd95', 'hd95_std', 'masd', 'masd_std']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            
-            # Write header if file doesn't exist
-            if not csv_exists:
-                writer.writeheader()
-            
-            # Write results
-            writer.writerow({
-                'test_dataset_name': args.test_dataset,
-                'dice': f"{dice_score:.2f}",
-                'dice_std': f"{dice_std:.2f}",
-                'hd95': f"{hd95_score:.2f}",
-                'hd95_std': f"{hd95_std:.2f}",
-                'masd': f"{masd_score:.2f}",
-                'masd_std': f"{masd_std:.2f}"
-            })
-        
-        print(f"Results saved to: {results_csv_path}\n")
-
-        # Save image-wise metrics to CSV (extract from metric buffers)
-        if args.test_dataset == args.train_dataset_name:
-            image_wise_csv_path = os.path.join(os.path.dirname(model_dir), f'image_wise_results{"_largest_component" if args.largest_component else ""}_{args.test_dataset}.csv')
-        else:
-            image_wise_csv_path = os.path.join(model_dir, 'test', f'image_wise_results{"_largest_component" if args.largest_component else ""}_{args.test_dataset}.csv')
-        
-        os.makedirs(os.path.dirname(image_wise_csv_path), exist_ok=True)
-        
-        # Per-image metrics from MONAI buffers
-
-        def _buffer_row_to_scalar(buffer, idx):
-            row = buffer[idx]
-            if isinstance(row, torch.Tensor):
-                row = row.detach().float().reshape(-1)
-                # For multi-class metrics, store the mean across classes per image.
-                finite = torch.isfinite(row)
-                if finite.any():
-                    return row[finite].mean().item()
-                # Undefined, not perfect: surface distances are inf when the prediction
-                # is empty, and writing 0.0 here scored a total failure as a flawless
-                # boundary, pulling MASD/HD95 down exactly on the images the model got
-                # wrong. nan lets the results generator count it as undefined instead.
-                return float("nan")
-            return float(row)
-        
-        csv_exists = os.path.exists(image_wise_csv_path) and os.path.getsize(image_wise_csv_path) > 0
-        with open(image_wise_csv_path, 'a', newline='') as csvfile:
-            fieldnames = ['image_id', 'dice', 'hd95', 'masd']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            
-            # Write header only if file doesn't exist or is empty
-            if not csv_exists:
-                writer.writeheader()
-            
-            # Write image-wise results
-            for i, image_id in enumerate(image_ids):
-                writer.writerow({
-                    'image_id': image_id,
-                    'dice': f"{_buffer_row_to_scalar(dice_buffer, i):.2f}",
-                    'hd95': f"{_buffer_row_to_scalar(hd95_buffer, i):.2f}",
-                    'masd': f"{_buffer_row_to_scalar(masd_buffer, i):.2f}"
-                })
-        
-        print(f"Image-wise results saved to: {image_wise_csv_path}\n")
 
 
 if __name__ == "__main__":
