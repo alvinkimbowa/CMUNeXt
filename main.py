@@ -585,10 +585,13 @@ def eval(args):
             )
 
     include_bg = True if args.label_mode == 'multilabel' else (args.num_classes == 1)
+    # MONAI's default ignore_empty=True is what the sibling monounetv2 val.py uses: an
+    # empty prediction against a real target still scores Dice 0 and counts, while a class
+    # absent from both is undefined rather than a perfect 1.0.
     dice_metric = DiceMetric(
         include_background=include_bg,
         reduction="mean",
-        ignore_empty=False,
+        ignore_empty=True,
     )
     hd95_metric = HausdorffDistanceMetric(include_background=include_bg, reduction="mean", percentile=95)
     surface_dice_metric = SurfaceDistanceMetric(include_background=include_bg, reduction="mean")
@@ -801,7 +804,11 @@ def eval(args):
                 finite = torch.isfinite(row)
                 if finite.any():
                     return row[finite].mean().item()
-                return 0.0
+                # Undefined, not perfect: surface distances are inf when the prediction
+                # is empty, and writing 0.0 here scored a total failure as a flawless
+                # boundary, pulling MASD/HD95 down exactly on the images the model got
+                # wrong. nan lets the results generator count it as undefined instead.
+                return float("nan")
             return float(row)
         
         csv_exists = os.path.exists(image_wise_csv_path) and os.path.getsize(image_wise_csv_path) > 0
