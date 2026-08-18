@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -e
+
 source ../UNeXt/.venv/bin/activate
 
 nnUNet_raw="../monounetv2/data/nnUNet_raw"
@@ -9,12 +11,12 @@ export nnUNet_raw=$nnUNet_raw
 export nnUNet_preprocessed=$nnUNet_preprocessed
 
 train=1
-eval=0
-analyze=0
+eval=1
+analyze=1
 # train_dataset_name="Dataset072_GE_LQP9"
 # train_dataset_name="Dataset073_GE_LE"
 # train_dataset_name="Dataset070_Clarius_L15"
-train_dataset_name="Dataset080_BUSBRA_GE_Logiq_5"
+# train_dataset_name="Dataset080_BUSBRA_GE_Logiq_5"
 # train_dataset_name="Dataset081_BUSBRA_GE_Logiq_7"
 # train_dataset_name="Dataset082_BUSBRA_Toshiba_Aplio_300"
 # train_dataset_name="Dataset083_BUSBRA_U_Systems"
@@ -22,14 +24,16 @@ train_dataset_name="Dataset080_BUSBRA_GE_Logiq_5"
 # train_dataset_name="Dataset085_KidneyUS_Other_Devices"
 # train_dataset_name="Dataset086_MMOTU_2D"
 # train_dataset_name="Dataset087_MMOTU_CEUS"
+train_dataset_name="Dataset089_Echo_CardiacUDA"
 model="CMUNeXt-S"
 data_augmentation=false
-num_classes=1
+num_classes=6
 # Evaluation settings
 # test_datasets=("Dataset072_GE_LQP9" "Dataset073_GE_LE" "Dataset070_Clarius_L15") # "Dataset079_KneeUS_Ilker")
-test_datasets=("Dataset080_BUSBRA_GE_Logiq_5" "Dataset081_BUSBRA_GE_Logiq_7" "Dataset082_BUSBRA_Toshiba_Aplio_300" "Dataset083_BUSBRA_U_Systems")
+# test_datasets=("Dataset080_BUSBRA_GE_Logiq_5" "Dataset081_BUSBRA_GE_Logiq_7" "Dataset082_BUSBRA_Toshiba_Aplio_300" "Dataset083_BUSBRA_U_Systems")
 # test_datasets=("Dataset084_KidneyUS_Philips" "Dataset085_KidneyUS_Other_Devices")
 # test_datasets=("Dataset086_MMOTU_2D" "Dataset087_MMOTU_CEUS")
+test_datasets=("Dataset090_Echo_EchoCP" "Dataset093_Echo_CardiacNet")
 save_preds=true
 largest_component=true
 # Analysis defaults
@@ -98,7 +102,7 @@ if [[ $analyze -eq 1 ]]; then
     analyze_input_w=256
     analyze_deep_supervision=False
     
-    analyze_args="--arch $current_arch --input_channels $input_channels --input_h $analyze_input_h --input_w $analyze_input_w --gpu $gpu"
+    analyze_args="--arch $current_arch --input_channels $input_channels --num_classes $num_classes --input_h $analyze_input_h --input_w $analyze_input_w --gpu $gpu"
     
     # Save analysis to model directory if it exists
     model_dir="models/$current_arch"
