@@ -27,6 +27,8 @@ from utils.metrics import iou_score, prepare_target_for_loss
 from network.CMUNeXt import cmunext, cmunext_s, cmunext_l
 from tqdm import tqdm
 
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 
