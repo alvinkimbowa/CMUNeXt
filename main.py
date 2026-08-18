@@ -490,21 +490,28 @@ def train(args):
             best_iou = avg_meters['val_iou'].avg
             print("=> saved best model")
 
-        torch.save(
-            {
-                'epoch': epoch_num,
-                'iter_num': iter_num,
-                'best_iou': best_iou,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'log': log,
-            },
-            last_ckpt_path
-        )
+        # Keep a resumable checkpoint while training is incomplete. On the
+        # final epoch, the previous checkpoint_last remains as a fallback
+        # until checkpoint_final has been written successfully below.
+        if epoch_num < max_epoch - 1:
+            torch.save(
+                {
+                    'epoch': epoch_num,
+                    'iter_num': iter_num,
+                    'best_iou': best_iou,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'log': log,
+                },
+                last_ckpt_path
+            )
         save_training_log_csv(log, training_log_path)
     
     torch.save(model.state_dict(), f'{model_dir}/checkpoint_final.pth')
     print("=> saved final model")
+    if os.path.exists(last_ckpt_path):
+        os.remove(last_ckpt_path)
+        print("=> removed resume checkpoint after successful completion")
     
     return "Training Finished!"
 
